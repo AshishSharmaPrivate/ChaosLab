@@ -189,7 +189,7 @@ chmod 400 "key.pem" 
 ssh -i your-key.pem ubuntu@<EC2-Public-IP>  
 
 
->>>>> Install CloudWatch Agent  
+>>>>> Install CloudWatch Agent incase any issue while installation. 
 
 Run the following commands on your Ubuntu EC2 instance:  
 
