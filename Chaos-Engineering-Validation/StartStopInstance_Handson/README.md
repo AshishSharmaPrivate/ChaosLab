@@ -1,6 +1,6 @@
 Chaos Experiment - Instance Start and Stop Hands-on 
  
-Objective: 
+>>>>> Objective: 
 
 Resiliency against an AZ failure 
 
@@ -21,7 +21,7 @@ This validates that the system can tolerate AZ-level disruptions without downtim
 
  
 
-Architecture Overview 
+>>>>> Architecture Overview 
 
 Components created with Terraform: 
 
@@ -43,7 +43,7 @@ FIS Experiment Template → Stops one instance to simulate AZ failure.
 
  
 
-Step-by-Step Implementation 
+>>>> Step-by-Step Implementation 
 
 Step 1: Terraform Setup 
 
@@ -55,7 +55,7 @@ Add the Terraform code (main.tf).
 
 
 
-Expected Chaos Demo Flow 
+>>>> Expected Chaos Demo Flow 
 
 Visit ALB URL → Served by Instance B. 
 
@@ -65,7 +65,7 @@ Refresh browser → ALB automatically shifts traffic to Instance A.
 
 ………………………………………………………………. 
 
-Navigate to AWS FIS (Console) 
+>>>> Navigate to AWS FIS (Console) 
 
 Login to your AWS Management Console. 
 
@@ -85,7 +85,7 @@ Actions → Start
 
 ………………………………………………………………….. 
 
-Steps to Check in Browser 
+>>>> Steps to Check in Browser 
 
 Open your Load Balancer DNS URL (example: http://<ALB-DNS>). 
 
@@ -105,7 +105,7 @@ Now you’ll see Instance B page (Hello).
 
  
 
-Chaos Handons Summary 
+>>>>> Chaos Handons Summary 
 
 Objective 
 
@@ -164,3 +164,4 @@ Visual Representation (for presentations)
 
  ALB automatically shifts traffic to Instance B
  → System stays online
+
