@@ -1,0 +1,412 @@
+provider "aws" {
+  region = "us-east-2"
+}
+
+# ============================================================
+# Get Default VPC
+# ============================================================
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+# ============================================================
+# Get All Default VPC Subnets
+# Used by the Application Load Balancer
+# ============================================================
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+# ============================================================
+# Get Default Subnet in us-east-2a
+# Used by Instance A
+# ============================================================
+
+data "aws_subnets" "az_a" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+
+  filter {
+    name   = "availability-zone"
+    values = ["us-east-2a"]
+  }
+}
+
+# ============================================================
+# Get Default Subnet in us-east-2b
+# Used by Instance B
+# ============================================================
+
+data "aws_subnets" "az_b" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+
+  filter {
+    name   = "availability-zone"
+    values = ["us-east-2b"]
+  }
+}
+
+# ============================================================
+# Security Group for EC2 + ALB
+# ============================================================
+
+resource "aws_security_group" "demo_sg" {
+  name        = "chaos-demo-sg"
+  description = "Allow SSH and HTTP"
+  vpc_id      = data.aws_vpc.default.id
+
+  # SSH
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTP
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Outbound
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "Chaos-Demo-SG"
+  }
+}
+
+# ============================================================
+# EC2 Instance A
+# Explicitly placed in us-east-2a
+# ============================================================
+
+resource "aws_instance" "instance_a" {
+  ami           = "ami-0cfde0ea8edd312d4"
+  instance_type = "t2.micro"
+
+  # Select subnet specifically from us-east-2a
+  subnet_id = data.aws_subnets.az_a.ids[0]
+
+  vpc_security_group_ids = [
+    aws_security_group.demo_sg.id
+  ]
+
+  user_data = <<-EOF
+              #!/bin/bash
+
+              apt update -y
+              apt install -y nginx
+
+              echo "Hello from Instance A (us-east-2a)" > /var/www/html/index.html
+
+              systemctl enable nginx
+              systemctl start nginx
+              EOF
+
+  tags = {
+    Name = "Instance-A"
+    AZ   = "us-east-2a"
+  }
+}
+
+# ============================================================
+# EC2 Instance B
+# Explicitly placed in us-east-2b
+# ============================================================
+
+resource "aws_instance" "instance_b" {
+  ami           = "ami-0cfde0ea8edd312d4"
+  instance_type = "t2.micro"
+
+  # Select subnet specifically from us-east-2b
+  subnet_id = data.aws_subnets.az_b.ids[0]
+
+  vpc_security_group_ids = [
+    aws_security_group.demo_sg.id
+  ]
+
+  user_data = <<-EOF
+              #!/bin/bash
+
+              apt update -y
+              apt install -y nginx
+
+              echo "Hello from Instance B (us-east-2b)" > /var/www/html/index.html
+
+              systemctl enable nginx
+              systemctl start nginx
+              EOF
+
+  tags = {
+    Name = "Instance-B"
+    AZ   = "us-east-2b"
+  }
+}
+
+# ============================================================
+# Application Load Balancer
+# ============================================================
+
+resource "aws_lb" "app_lb" {
+  name               = "chaos-demo-lb"
+  internal           = false
+  load_balancer_type = "application"
+
+  security_groups = [
+    aws_security_group.demo_sg.id
+  ]
+
+  # ALB uses all default VPC subnets
+  subnets = data.aws_subnets.default.ids
+
+  tags = {
+    Name = "Chaos-Demo-ALB"
+  }
+}
+
+# ============================================================
+# Target Group
+# ============================================================
+
+resource "aws_lb_target_group" "app_tg" {
+  name     = "chaos-demo-tg"
+  port     = 80
+  protocol = "HTTP"
+
+  vpc_id = data.aws_vpc.default.id
+
+  health_check {
+    enabled             = true
+    path                = "/"
+    port                = "80"
+    protocol            = "HTTP"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    matcher             = "200"
+  }
+
+  tags = {
+    Name = "Chaos-Demo-TG"
+  }
+}
+
+# ============================================================
+# ALB Listener
+# ============================================================
+
+resource "aws_lb_listener" "app_listener" {
+  load_balancer_arn = aws_lb.app_lb.arn
+
+  port     = 80
+  protocol = "HTTP"
+
+  default_action {
+    type = "forward"
+
+    target_group_arn = aws_lb_target_group.app_tg.arn
+  }
+}
+
+# ============================================================
+# Register Instance A with Target Group
+# ============================================================
+
+resource "aws_lb_target_group_attachment" "a" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+
+  target_id = aws_instance.instance_a.id
+
+  port = 80
+}
+
+# ============================================================
+# Register Instance B with Target Group
+# ============================================================
+
+resource "aws_lb_target_group_attachment" "b" {
+  target_group_arn = aws_lb_target_group.app_tg.arn
+
+  target_id = aws_instance.instance_b.id
+
+  port = 80
+}
+
+# ============================================================
+# IAM Role for AWS Fault Injection Service (FIS)
+# ============================================================
+
+resource "aws_iam_role" "fis_role" {
+  name = "ChaosFISRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Principal = {
+          Service = "fis.amazonaws.com"
+        }
+
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "Chaos-FIS-Role"
+  }
+}
+
+# ============================================================
+# IAM Policy for FIS
+# ============================================================
+
+resource "aws_iam_role_policy" "fis_policy" {
+  name = "ChaosFISPolicy"
+
+  role = aws_iam_role.fis_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "ec2:StopInstances",
+          "ec2:StartInstances",
+          "ec2:DescribeInstances"
+        ]
+
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ============================================================
+# AWS FIS Experiment
+# Stops Instance A
+# ============================================================
+
+resource "aws_fis_experiment_template" "chaos_experiment" {
+  description = "Chaos Engineering Demo: Stop Instance A"
+
+  role_arn = aws_iam_role.fis_role.arn
+
+  # No automatic stop condition
+  stop_condition {
+    source = "none"
+  }
+
+  # ----------------------------------------------------------
+  # Target Instance A
+  # ----------------------------------------------------------
+
+  target {
+    name = "TargetInstances"
+
+    resource_type = "aws:ec2:instance"
+
+    selection_mode = "ALL"
+
+    resource_arns = [
+      aws_instance.instance_a.arn
+    ]
+  }
+
+  # ----------------------------------------------------------
+  # Stop Instance A
+  # ----------------------------------------------------------
+
+  action {
+    name      = "stop-instances"
+    action_id = "aws:ec2:stop-instances"
+
+    target {
+      key   = "Instances"
+      value = "TargetInstances"
+    }
+  }
+
+  tags = {
+    Name = "ChaosExperiment"
+  }
+}
+
+# ============================================================
+# Outputs
+# ============================================================
+
+output "load_balancer_dns" {
+  description = "Application Load Balancer DNS name"
+
+  value = aws_lb.app_lb.dns_name
+}
+
+output "instance_a_id" {
+  description = "Instance A ID"
+
+  value = aws_instance.instance_a.id
+}
+
+output "instance_a_private_ip" {
+  description = "Instance A private IP"
+
+  value = aws_instance.instance_a.private_ip
+}
+
+output "instance_a_availability_zone" {
+  description = "Instance A Availability Zone"
+
+  value = aws_instance.instance_a.availability_zone
+}
+
+output "instance_b_id" {
+  description = "Instance B ID"
+
+  value = aws_instance.instance_b.id
+}
+
+output "instance_b_private_ip" {
+  description = "Instance B private IP"
+
+  value = aws_instance.instance_b.private_ip
+}
+
+output "instance_b_availability_zone" {
+  description = "Instance B Availability Zone"
+
+  value = aws_instance.instance_b.availability_zone
+
+}
+
+output "fis_experiment_id" {
+  description = "AWS FIS Experiment Template ID"
+
+  value = aws_fis_experiment_template.chaos_experiment.id
+}
